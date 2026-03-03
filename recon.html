@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Reconnaissance in Progress</title>
+</head>
+<body>
+    <h1>Starting Reconnaissance...</h1>
+    <p>This page gathers non-invasive system data. If you are a friendly bot, have a nice day!</p>
+    <div id="output">Collecting data...</div>
+
+    <script>
+        // --- 1. CONFIGURATION: PASTE YOUR HOOKDECK URL HERE ---
+        const yourWebhookUrl = "Phttps://hkdk.events/dp0gb9zztqv6wp"; 
+        // Example: "https://hookdeck.co/unique-id"
+        // -----------------------------------------------------
+
+        async function gatherAndSendData() {
+            try {
+                // Collect Safe, Non-Invasive Browser Data
+                const reconData = {
+                    navigator: {
+                        userAgent: navigator.userAgent || 'Unknown',
+                        platform: navigator.platform || 'Unknown',
+                        language: navigator.language || 'Unknown',
+                        deviceMemory: navigator.deviceMemory || 'Unknown', // In GB
+                        hardwareConcurrency: navigator.hardwareConcurrency || 'Unknown', // Num. CPU cores
+                    },
+                    screen: {
+                        width: window.screen.width,
+                        height: window.screen.height,
+                        colorDepth: window.screen.colorDepth,
+                    },
+                    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'Unknown',
+                    referrer: document.referrer || 'None',
+                    timestamp: new Date().toISOString()
+                };
+
+                // Display collected data on the page (for user visibility)
+                document.getElementById('output').innerHTML = '<pre>' + JSON.stringify(reconData, null, 2) + '</pre>';
+
+                // Send the data to your free Hookdeck endpoint
+                console.log("Sending recon data...");
+                const response = fetch(yourWebhookUrl, {
+                    method: 'POST',
+                    mode: 'no-cors', // Use no-cors to avoid CORS preflight failures
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(reconData)
+                });
+                
+                // If it's the Notion bot, we have no way to see the response anyway.
+                // It will just see that it successfully loaded this page and executed the script.
+                console.log("Recon data sent!");
+
+            } catch (error) {
+                console.error("An error occurred during recon:", error);
+                document.getElementById('output').textContent = "Error collecting data: " + error.message;
+            }
+        }
+
+        // Start the process immediately when the page loads
+        gatherAndSendData();
+    </script>
+</body>
+</html>
