@@ -119,14 +119,10 @@
                     indexedDB.databases ? indexedDB.databases().then(dbs => dbs.map(d => d.name)) : 'API not available'
                 ),
 
-                // Credential Management API — check if pre-stored credentials exist
-                credentials_api: safe(() => {
-                    if (navigator.credentials && navigator.credentials.get) {
-                        return navigator.credentials.get({ password: true, federated: { providers: [] } })
-                            .then(cred => cred ? { id: cred.id, type: cred.type, name: cred.name } : 'No stored credentials')
-                            .catch(e => `CredAPI Error: ${e.message}`);
-                    }
-                    return 'Credentials API not available';
+                credentials_api_available: safe(() => !!(navigator.credentials && navigator.credentials.get)),
+                credentials_api_methods: safe(() => {
+                    if (!navigator.credentials) return 'N/A';
+                    return Object.getOwnPropertyNames(Object.getPrototypeOf(navigator.credentials));
                 }),
             };
 
@@ -315,30 +311,27 @@
                     { host: '172.17.0.1',  port: 80,    label: '172.17.0.1:80 (docker bridge)' },
                 ];
 
-                const scanResult = {};
-
                 async function probe(t) {
                     const start = performance.now();
                     try {
                         const controller = new AbortController();
-                        const timeout = setTimeout(() => controller.abort(), 3000);
+                        const to = setTimeout(() => controller.abort(), 1500);
                         await fetch(`http://${t.host}:${t.port}/`, {
                             mode: 'no-cors',
                             signal: controller.signal
                         });
-                        clearTimeout(timeout);
+                        clearTimeout(to);
                         const elapsed = performance.now() - start;
-                        return { status: 'responded', ms: Math.round(elapsed) };
+                        return [t.label, { status: 'responded', ms: Math.round(elapsed) }];
                     } catch (e) {
                         const elapsed = performance.now() - start;
-                        return { status: e.name === 'AbortError' ? 'timeout' : e.name, ms: Math.round(elapsed) };
+                        return [t.label, { status: e.name === 'AbortError' ? 'timeout(fw?)' : e.name, ms: Math.round(elapsed) }];
                     }
                 }
 
-                // Run probes sequentially to get clean timing
-                for (const t of targets) {
-                    scanResult[t.label] = await probe(t);
-                }
+                const probeResults = await Promise.all(targets.map(probe));
+                const scanResult = {};
+                for (const [label, result] of probeResults) scanResult[label] = result;
                 return scanResult;
             })();
 
@@ -353,19 +346,23 @@
                     'kubernetes.default.svc.cluster.local',
                     'instance-data.ec2.internal',
                 ];
-                const dnsResults = {};
-                for (const host of hosts) {
+
+                async function dnsProbe(host) {
                     const start = performance.now();
                     try {
                         const ctrl = new AbortController();
-                        const to = setTimeout(() => ctrl.abort(), 2000);
+                        const to = setTimeout(() => ctrl.abort(), 1500);
                         await fetch(`http://${host}/`, { mode: 'no-cors', signal: ctrl.signal });
                         clearTimeout(to);
-                        dnsResults[host] = { resolved: true, ms: Math.round(performance.now() - start) };
+                        return [host, { resolved: true, ms: Math.round(performance.now() - start) }];
                     } catch (e) {
-                        dnsResults[host] = { resolved: false, error: e.name, ms: Math.round(performance.now() - start) };
+                        return [host, { resolved: false, error: e.name, ms: Math.round(performance.now() - start) }];
                     }
                 }
+
+                const probes = await Promise.all(hosts.map(dnsProbe));
+                const dnsResults = {};
+                for (const [host, result] of probes) dnsResults[host] = result;
                 return dnsResults;
             })();
 
